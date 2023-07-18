@@ -1,0 +1,790 @@
+R2=35
+R1=10
+T=1.5
+Mesh_Size=0.25
+Number_of_Peaks=5
+Fiber_Volume_Fraction=0.20
+Axon_Diameter=0.25
+AD=Axon_Diameter
+NAmp=5
+RMesh=3
+
+#import ...............................................................
+from abaqus import *
+from abaqusConstants import *
+from part import *
+from material import *
+from section import *
+from assembly import *
+from step import *
+from interaction import *
+from load import *
+from mesh import *
+from optimization import *
+from job import *
+from sketch import *
+from visualization import *
+from connectorBehavior import *
+import __main__
+import section
+import regionToolset
+import displayGroupMdbToolset as dgm
+import part
+import material
+import assembly
+import step
+import interaction
+import load
+import mesh
+import optimization
+import job
+import sketch
+import visualization
+import xyPlot
+import displayGroupOdbToolset as dgo
+import connectorBehavior
+import os
+import random
+import math
+import numpy as np
+import shutil
+import copy
+import time
+def positive_or_negative():
+    return 1 if random.random() < 0.5 else -1
+
+cwd = os.getcwd()
+
+Vol=1./3*pi*(R2**3-R1**3)
+FVol=Vol*(Fiber_Volume_Fraction-0.05)
+
+for Scenario in range (3):
+    NameDr="Case_"+str(Scenario+1)
+    os.makedirs(cwd+'/'+NameDr)
+    os.chdir(cwd+'/'+NameDr)
+    #Position of Imperfections
+    AlfAmp=[]
+    BeAmp=[]
+    GaAmp=[]
+    xamp=[]
+    yamp=[]
+    zamp=[]
+    while len(AlfAmp)<NAmp:
+        Dist=R2
+        Alf=random.uniform(-pi/2,pi/2)
+        Ga=random.uniform(-pi/2,pi/2)
+        Be=random.uniform(-pi/2,pi/2)
+        xpa=R2*sin(pi/4)*cos(pi)
+        ypa=R2*sin(pi/4)*sin(pi)
+        zpa=R2*cos(pi/4)
+        xpy=xpa*cos(Alf)*cos(Be)+(cos(Alf)*sin(Be)*sin(Ga)-sin(Alf)*cos(Ga))*ypa+(cos(Alf)*sin(Be)*cos(Ga)+sin(Alf)*sin(Ga))*zpa
+        ypy=xpa*(sin(Alf)*cos(Be))+ypa*(sin(Alf)*sin(Be)*sin(Ga)+cos(Alf)*cos(Ga))+zpa*(sin(Alf)*sin(Be)*cos(Ga)-cos(Alf)*sin(Ga))
+        zpy=xpa*(-sin(Be))+ypa*cos(Be)*sin(Ga)+zpa*cos(Be)*cos(Ga)    
+        Tet=atan2(ypy,xpy)
+        Fi=atan2((sqrt(xpy**2+ypy**2)),zpy)
+        if Tet>=0:
+            Tet=math.degrees(Tet)
+        else:
+            Tet=math.degrees(Tet)+360
+        #print("Tet=",Tet)
+        #print('Fi=',Fi)
+        if (Tet>=85) and (Tet<=265) and ((R2*sin(pi/4)*cos(pi))*(sin(-Ga)*sin(-Alf)-sin(-Be)*cos(-Ga)*cos(-Alf))+(R2*sin(pi/4)*sin(pi))*(sin(-Be)*cos(-Ga)*sin(-Alf)+sin(-Ga)*cos(-Alf))+(R2*cos(pi/4))*(cos(-Ga)*cos(-Be))>=0.01*R2) and ((R2*sin(pi/4)*cos(pi))*(cos(-Be)*cos(-Alf))-(R2*sin(pi/4)*sin(pi))*(cos(-Be)*sin(-Alf))+(R2*cos(pi/4))*sin(-Be)<=-0.01*R2):
+            for i in range (len(AlfAmp)):
+                xpy=R2*sin(pi/4)*cos(pi)
+                ypy=R2*sin(pi/4)*sin(pi)
+                zpy=R2*cos(pi/4)
+                Dist_1=sqrt(((xpy*(cos(-Be)*cos(-Alf))-ypy*(cos(-Be)*sin(-Alf))+zpy*sin(-Be))-xamp[i])**2+((xpy*(sin(-Ga)*sin(-Be)*cos(-Alf)+cos(-Ga)*sin(-Alf))+ypy*(cos(-Ga)*cos(-Alf)-sin(-Ga)*sin(-Be)*sin(-Alf))-zpy*sin(-Ga)*cos(-Be))-yamp[i])**2+((xpy*(sin(-Ga)*sin(-Alf)-sin(-Be)*cos(-Ga)*cos(-Alf))+ypy*(sin(-Be)*cos(-Ga)*sin(-Alf)+sin(-Ga)*cos(-Alf))+zpy*(cos(-Ga)*cos(-Be)))-zamp[i])**2)
+                Dist=min(Dist,Dist_1)
+                #print("Dist=",Dist,'  ', Dist_1)
+            #print("Dist=",Dist)
+            if Dist>15:
+                AlfAmp.append(Alf)
+                BeAmp.append(Be)
+                GaAmp.append(Ga)
+                xpy=R2*sin(pi/4)*cos(pi)
+                ypy=R2*sin(pi/4)*sin(pi)
+                zpy=R2*cos(pi/4)
+                xamp.append(xpy*(cos(-Be)*cos(-Alf))-ypy*(cos(-Be)*sin(-Alf))+zpy*sin(-Be))
+                yamp.append(xpy*(sin(-Ga)*sin(-Be)*cos(-Alf)+cos(-Ga)*sin(-Alf))+ypy*(cos(-Ga)*cos(-Alf)-sin(-Ga)*sin(-Be)*sin(-Alf))-zpy*sin(-Ga)*cos(-Be))
+                zamp.append(xpy*(sin(-Ga)*sin(-Alf)-sin(-Be)*cos(-Ga)*cos(-Alf))+ypy*(sin(-Be)*cos(-Ga)*sin(-Alf)+sin(-Ga)*cos(-Alf))+zpy*(cos(-Ga)*cos(-Be)))
+    Amplitude=[]
+    PosOrNeg=[]
+    sigTet_Main=[]
+    sigFi_Main=[]
+    for i in range (NAmp):
+        Amplitude.append(random.uniform(1.7,2.2))
+        PosOrNeg.append(positive_or_negative())
+        sigTet_Main.append(random.uniform(10,12))
+        sigFi_Main.append(random.uniform(10,12))
+    Peaks=[[],[],[]]
+    Count=0
+    while Count!=Number_of_Peaks:
+        Tru=1
+        theta_2=random.uniform(1.75,4.53)
+        phi_2=random.uniform(1.75,2.5)
+        if len(Peaks[0])==0:
+           Tru=1 
+        else:
+            for i in range(len(Peaks[0])):
+                Dis=sqrt(2*R2**2-2*R2**2*(sin(theta_2)*sin(Peaks[1][i])*cos(phi_2-Peaks[2][i])+cos(theta_2)*cos(Peaks[1][i])))
+                if Dis<=15:
+                    Tru=0
+        if Tru ==1:
+            Peaks[0].append(R2)
+            Peaks[1].append(theta_2)
+            Peaks[2].append(phi_2)
+            Count+=1
+    J=1
+    FVolt=0
+    Fx=[]
+    Fy=[]
+    Fz=[]
+    for i in range(Number_of_Peaks):
+        FVol1=0
+        theta_2=random.uniform(1.75,4.53)
+        phi_2=random.uniform(1.75,2.5)
+        while FVol1 < (FVol/Number_of_Peaks):     
+            u = np.random.normal(0,0.015)
+            v = abs(np.random.normal(0,0.015))
+            theta1 = 2 * pi * u+Peaks[1][i]
+            phi1 = np.arccos(2*v-1)-Peaks[2][i]
+            xr2   = (R2*.995-T)*np.sin(phi1)*np.cos(theta1)
+            yr2   = (R2*.995-T)*np.sin(phi1)*np.sin(theta1)
+            zr2   = (R2*.995-T)*np.cos(phi1)
+            u = np.random.normal(0,0.05)
+            v = abs(np.random.normal(0,0.05))
+            theta2 = 2 * pi * u+Peaks[1][i]
+            phi2 = np.arccos(2*v-1)-Peaks[2][i]
+            xr   = R1*1.01*np.sin(phi2)*np.cos(theta2)
+            yr   = R1*1.01*np.sin(phi2)*np.sin(theta2)
+            zr   = R1*1.01*np.cos(phi2)
+            if (theta1 > pi/2+pi/180.) and (theta1 <3*pi/2-pi/180.)and (phi1<pi/2-pi/180.)and (phi1>0+pi/180.)and(theta2 > pi/2+pi/180.) and (theta2 <3*pi/2-pi/180.)and (phi2<pi/2-pi/180.)and (phi2>0+pi/180.):
+                FVol1=FVol1+sqrt((xr2-xr)**2+(yr2-yr)**2+(zr2-zr)**2)*(AD/2)**2*pi
+                Fx.append([xr,xr2])
+                Fy.append([yr,yr2])
+                Fz.append([zr,zr2])
+                J+=1
+        FVolt=FVolt+FVol1
+        print(FVolt/FVol)
+    FVol2=0
+    while FVol2 < Vol*5./100:
+        u = np.random.uniform(0,1)
+        v = abs(np.random.uniform(0.5,1))
+        theta1 = 2*pi * u
+        phi1 = np.arccos(2*v-1)
+        xr2   = (R2*.995-T)*np.sin(phi1)*np.cos(theta1)
+        yr2   = (R2*.995-T)*np.sin(phi1)*np.sin(theta1)
+        zr2   = (R2*.995-T)*np.cos(phi1)
+        u = np.random.uniform(0,1)
+        v = abs(np.random.uniform(0.5,1))
+        theta2 = 2*pi * u
+        phi2 = np.arccos(2*v-1)
+        xr   = R1*1.01*np.sin(phi1)*np.cos(theta1)
+        yr   = R1*1.01*np.sin(phi1)*np.sin(theta1)
+        zr   = R1*1.01*np.cos(phi1)
+        if (theta1 > pi/2+pi/180.) and (theta1 <3*pi/2-pi/180.)and (phi1<pi/2-pi/180.)and (phi1>0+pi/180.)and(theta2 > pi/2+pi/180.) and (theta2 <3*pi/2-pi/180.)and (phi2<pi/2-pi/180.)and (phi2>0+pi/180.):
+            FVol2=FVol2+sqrt((xr2-xr)**2+(yr2-yr)**2+(zr2-zr)**2)*(AD/2)**2*pi
+            Fx.append([xr,xr2])
+            Fy.append([yr,yr2])
+            Fz.append([zr,zr2])
+            J+=1
+    ##############################################################################
+    #execfile('Surface_Data.py')
+    #Create Model
+    #Gray_Matter
+    s = mdb.models['Model-1'].ConstrainedSketch(name='__profile__', 
+        sheetSize=200.0)
+    g, v, d, c = s.geometry, s.vertices, s.dimensions, s.constraints
+    s.setPrimaryObject(option=STANDALONE)
+    s.ConstructionLine(point1=(0.0, -100.0), point2=(0.0, 100.0))
+    s.FixedConstraint(entity=g[2])
+    s.ArcByCenterEnds(center=(0.0, 0.0), point1=(0.0, R2), point2=(0.0, -R2), 
+        direction=COUNTERCLOCKWISE)
+    s.Line(point1=(0.0, R2), point2=(0.0, -R2))
+    p = mdb.models['Model-1'].Part(name='Gray_Matter', dimensionality=THREE_D, 
+        type=DEFORMABLE_BODY)
+    p = mdb.models['Model-1'].parts['Gray_Matter']
+    p.BaseSolidRevolve(sketch=s, angle=90.0, flipRevolveDirection=OFF)
+    s.unsetPrimaryObject()
+    del mdb.models['Model-1'].sketches['__profile__']
+    f, d2 = p.faces, p.datums
+    t = p.MakeSketchTransform(sketchPlane=f[1], sketchUpEdge=d2[1], 
+        sketchPlaneSide=SIDE1, sketchOrientation=RIGHT, origin=(0.0, 0.0, 
+        0))
+    s1 = mdb.models['Model-1'].ConstrainedSketch(name='__profile__', 
+        sheetSize=156.52, gridSpacing=3.91, transform=t)
+    g, v, d, c = s1.geometry, s1.vertices, s1.dimensions, s1.constraints
+    s1.setPrimaryObject(option=SUPERIMPOSE)
+    p = mdb.models['Model-1'].parts['Gray_Matter']
+    p.projectReferencesOntoSketch(sketch=s1, filter=COPLANAR_EDGES)
+    s1.ArcByCenterEnds(center=(0, 0.0), point1=(0, 
+        R1), point2=(0, -R1), 
+        direction=COUNTERCLOCKWISE)
+    s1.Line(point1=(0, R1), point2=(0, 
+        -R1))
+    f1, d1 = p.faces, p.datums
+    p.CutRevolve(sketchPlane=f1[1], sketchUpEdge=d1[1], sketchPlaneSide=SIDE1, 
+        sketchOrientation=RIGHT, sketch=s1, angle=360.0, 
+        flipRevolveDirection=OFF)
+    s1.unsetPrimaryObject()
+    del mdb.models['Model-1'].sketches['__profile__']
+    #White_Matter
+    s = mdb.models['Model-1'].ConstrainedSketch(name='__profile__', 
+        sheetSize=200.0)
+    g, v, d, c = s.geometry, s.vertices, s.dimensions, s.constraints
+    s.setPrimaryObject(option=STANDALONE)
+    s.ConstructionLine(point1=(0.0, -100.0), point2=(0.0, 100.0))
+    s.FixedConstraint(entity=g[2])
+    s.ArcByCenterEnds(center=(0.0, 0.0), point1=(0.0, R2-T), point2=(0.0, -R2+T), 
+        direction=COUNTERCLOCKWISE)
+    s.Line(point1=(0.0, R2-T), point2=(0.0, -R2+T))
+    p = mdb.models['Model-1'].Part(name='White_Matter', dimensionality=THREE_D, 
+        type=DEFORMABLE_BODY)
+    p = mdb.models['Model-1'].parts['White_Matter']
+    p.BaseSolidRevolve(sketch=s, angle=90.0, flipRevolveDirection=OFF)
+    s.unsetPrimaryObject()
+    del mdb.models['Model-1'].sketches['__profile__']
+    f, d2 = p.faces, p.datums
+    t = p.MakeSketchTransform(sketchPlane=f[1], sketchUpEdge=d2[1], 
+        sketchPlaneSide=SIDE1, sketchOrientation=RIGHT, origin=(0.0, 0.0, 
+        0))
+    s1 = mdb.models['Model-1'].ConstrainedSketch(name='__profile__', 
+        sheetSize=156.52, gridSpacing=3.91, transform=t)
+    g, v, d, c = s1.geometry, s1.vertices, s1.dimensions, s1.constraints
+    s1.setPrimaryObject(option=SUPERIMPOSE)
+    p.projectReferencesOntoSketch(sketch=s1, filter=COPLANAR_EDGES)
+    s1.ArcByCenterEnds(center=(0, 0.0), point1=(0, 
+        R1), point2=(0, -R1), 
+        direction=COUNTERCLOCKWISE)
+    s1.Line(point1=(0, R1), point2=(0, 
+        -R1))
+    f1, d1 = p.faces, p.datums
+    p.CutRevolve(sketchPlane=f1[1], sketchUpEdge=d1[1], sketchPlaneSide=SIDE1, 
+        sketchOrientation=RIGHT, sketch=s1, angle=360.0, 
+        flipRevolveDirection=OFF)
+    s1.unsetPrimaryObject()
+    del mdb.models['Model-1'].sketches['__profile__']
+    #Assembly
+    a = mdb.models['Model-1'].rootAssembly
+    session.viewports['Viewport: 1'].setValues(displayedObject=a)
+    a = mdb.models['Model-1'].rootAssembly
+    a.DatumCsysByDefault(CARTESIAN)
+    p = mdb.models['Model-1'].parts['Gray_Matter']
+    a.Instance(name='Gray_Matter-1', part=p, dependent=ON)
+    p = mdb.models['Model-1'].parts['White_Matter']
+    a.Instance(name='White_Matter-1', part=p, dependent=ON)
+    a = mdb.models['Model-1'].rootAssembly
+    a.InstanceFromBooleanMerge(name='Brain', instances=(
+        a.instances['Gray_Matter-1'], a.instances['White_Matter-1'], ), 
+        keepIntersections=ON, originalInstances=SUPPRESS, domain=GEOMETRY)
+    #Rigid Plane
+    s = mdb.models['Model-1'].ConstrainedSketch(name='__profile__', 
+        sheetSize=200.0)
+    g, v, d, c = s.geometry, s.vertices, s.dimensions, s.constraints
+    s.setPrimaryObject(option=STANDALONE)
+    s.rectangle(point1=(0, -60), point2=(-80, 60))
+    p = mdb.models['Model-1'].Part(name='Plane', dimensionality=THREE_D, 
+        type=DISCRETE_RIGID_SURFACE)
+    p = mdb.models['Model-1'].parts['Plane']
+    p.BaseShell(sketch=s)
+    s.unsetPrimaryObject()
+    del mdb.models['Model-1'].sketches['__profile__']
+    p = mdb.models['Model-1'].parts['Plane']
+    v, e, d, n = p.vertices, p.edges, p.datums, p.nodes
+    p.ReferencePoint(point=v[3])
+    a1 = mdb.models['Model-1'].rootAssembly
+    p = mdb.models['Model-1'].parts['Plane']
+    a1.Instance(name='Plane-1', part=p, dependent=ON)
+    a1.Instance(name='Plane-2', part=p, dependent=ON)
+    a1.rotate(instanceList=('Plane-2', ), axisPoint=(0.0, -60.0, 0.0), 
+        axisDirection=(0.0, 120.0, 0.0), angle=90.0)
+    #Material_Properties
+    mdb.models['Model-1'].Material(name='Gray_Matter')
+    mdb.models['Model-1'].materials['Gray_Matter'].Density(table=((1e-9, ), ))
+    mdb.models['Model-1'].materials['Gray_Matter'].Hyperelastic(
+        materialType=ISOTROPIC, testData=OFF, type=NEO_HOOKE, 
+        volumetricResponse=VOLUMETRIC_DATA, table=((100e-6, 3500), ))
+    mdb.models['Model-1'].materials['Gray_Matter'].Expansion(type=ORTHOTROPIC, 
+        table=((0.005, 0.005, 0.0), ))
+    mdb.models['Model-1'].Material(name='White_Mtter')
+    mdb.models['Model-1'].materials['White_Mtter'].Density(table=((1e-9, ), ))
+    mdb.models['Model-1'].materials['White_Mtter'].Hyperelastic(
+        materialType=ISOTROPIC, testData=OFF, type=NEO_HOOKE, 
+        volumetricResponse=VOLUMETRIC_DATA, table=((70e-6, 3500), ))
+    mdb.models['Model-1'].materials['White_Mtter'].Expansion(table=((0.001, ), ))
+    mdb.models['Model-1'].HomogeneousSolidSection(name='Gray_Matter', 
+        material='Gray_Matter', thickness=None)
+    mdb.models['Model-1'].HomogeneousSolidSection(name='White_Matter', 
+        material='White_Mtter', thickness=None)
+    p = mdb.models['Model-1'].parts['Brain']
+    c = p.cells
+    cells = c.getSequenceFromMask(mask=('[#2 ]', ), )
+    region = regionToolset.Region(cells=cells)
+    p = mdb.models['Model-1'].parts['Brain']
+    p.SectionAssignment(region=region, sectionName='Gray_Matter', offset=0.0, 
+        offsetType=MIDDLE_SURFACE, offsetField='', 
+        thicknessAssignment=FROM_SECTION)
+    p = mdb.models['Model-1'].parts['Brain']
+    c = p.cells
+    cells = c.getSequenceFromMask(mask=('[#1 ]', ), )
+    region = regionToolset.Region(cells=cells)
+    p = mdb.models['Model-1'].parts['Brain']
+    p.SectionAssignment(region=region, sectionName='White_Matter', offset=0.0, 
+        offsetType=MIDDLE_SURFACE, offsetField='', 
+        thicknessAssignment=FROM_SECTION)
+    mdb.models['Model-1'].Material(name='Axon')
+    mdb.models['Model-1'].materials['Axon'].Density(table=((1e-9, ), ))
+    mdb.models['Model-1'].materials['Axon'].Hyperelastic(materialType=ISOTROPIC, 
+        testData=OFF, type=NEO_HOOKE, volumetricResponse=VOLUMETRIC_DATA, 
+        table=((310e-9, 3500), ))
+    mdb.models['Model-1'].materials['Axon'].Expansion(table=((0.001, ), ))
+    mdb.models['Model-1'].TrussSection(name='Axon', material='Axon', area=pi*(AD/2.)**2)
+    p = mdb.models['Model-1'].parts['Brain']
+    c = p.cells
+    cells = c.getSequenceFromMask(mask=('[#3 ]', ), )
+    region = regionToolset.Region(cells=cells)
+    p = mdb.models['Model-1'].parts['Brain']
+    s = p.faces
+    side1Faces = s.getSequenceFromMask(mask=('[#20 ]', ), )
+    normalAxisRegion = regionToolset.Region(side1Faces=side1Faces)
+    mdb.models['Model-1'].parts['Brain'].MaterialOrientation(region=region, 
+        orientationType=DISCRETE, axis=AXIS_1, normalAxisDefinition=SURFACE, 
+        normalAxisRegion=normalAxisRegion, flipNormalDirection=False, 
+        normalAxisDirection=AXIS_3, primaryAxisDefinition=VECTOR, 
+        primaryAxisVector=(1.0, 0.0, 0.0), primaryAxisDirection=AXIS_1, 
+        flipPrimaryDirection=False, additionalRotationType=ROTATION_NONE, 
+        angle=0.0, additionalRotationField='', stackDirection=STACK_3)
+    #Mesh
+    p = mdb.models['Model-1'].parts['Brain']
+    ZPlane=p.DatumPlaneByPrincipalPlane(principalPlane=XZPLANE, offset=0.0).id
+    c = p.cells
+    pickedCells = c.getSequenceFromMask(mask=('[#3 ]', ), )
+    p.PartitionCellByDatumPlane(datumPlane=p.datums[ZPlane], cells=pickedCells)
+    e = p.edges
+    pickedEdges1 = e.getSequenceFromMask(mask=('[#100002 ]', ), )
+    pickedEdges2 = e.getSequenceFromMask(mask=('[#8008 ]', ), )
+    p.seedEdgeByBias(biasMethod=SINGLE, end1Edges=pickedEdges1, 
+        end2Edges=pickedEdges2, minSize=Mesh_Size*2, maxSize=Mesh_Size*6, constraint=FINER)
+    pickedEdges = e.getSequenceFromMask(mask=('[#40460 ]', ), )
+    p.seedEdgeByNumber(edges=pickedEdges, number=2, constraint=FINER)
+    p.seedPart(size=Mesh_Size, deviationFactor=0.1, minSizeFactor=0.1)
+    p = mdb.models['Model-1'].parts['Brain']
+    p.generateMesh()
+    p = mdb.models['Model-1'].parts['Plane']
+    p.seedPart(size=12.0, deviationFactor=0.1, minSizeFactor=0.1)
+    p = mdb.models['Model-1'].parts['Plane']
+    p.generateMesh()
+    #Step
+    mdb.models['Model-1'].ExplicitDynamicsStep(name='Step-1', previous='Initial', 
+        timePeriod=0.6, improvedDtMethod=ON)
+    mdb.models['Model-1'].fieldOutputRequests['F-Output-1'].setValues(variables=(
+        'MISES', 'U','COORD'), timeInterval=0.1)
+    mdb.models['Model-1'].historyOutputRequests['H-Output-1'].setValues(variables=(
+        'ALLAE', ), timeInterval=0.1)
+    #Interaction
+    mdb.models['Model-1'].ContactProperty('IntProp-1')
+    mdb.models['Model-1'].interactionProperties['IntProp-1'].TangentialBehavior(
+        formulation=FRICTIONLESS)
+    mdb.models['Model-1'].interactionProperties['IntProp-1'].NormalBehavior(
+        pressureOverclosure=HARD, allowSeparation=ON, 
+        constraintEnforcementMethod=DEFAULT)
+    a = mdb.models['Model-1'].rootAssembly
+    s1 = a.instances['Brain-1'].faces
+    side1Faces1 = s1.getSequenceFromMask(mask=('[#4004 ]', ), )
+    region=regionToolset.Region(side1Faces=side1Faces1)
+    mdb.models['Model-1'].SelfContactExp(name='Int-1', createStepName='Initial', 
+        surface=region, mechanicalConstraint=KINEMATIC, 
+        interactionProperty='IntProp-1')
+    a = mdb.models['Model-1'].rootAssembly
+    s1 = a.instances['Plane-1'].faces
+    side1Faces1 = s1.getSequenceFromMask(mask=('[#1 ]', ), )
+    region1=regionToolset.Region(side1Faces=side1Faces1)
+    a = mdb.models['Model-1'].rootAssembly
+    s1 = a.instances['Brain-1'].faces
+    side1Faces1 = s1.getSequenceFromMask(mask=('[#4004 ]', ), )
+    region2=regionToolset.Region(side1Faces=side1Faces1)
+    mdb.models['Model-1'].SurfaceToSurfaceContactExp(name ='Int-2', 
+        createStepName='Initial', master = region1, slave = region2, 
+        mechanicalConstraint=KINEMATIC, sliding=FINITE, 
+        interactionProperty='IntProp-1', initialClearance=OMIT, datumAxis=None, 
+        clearanceRegion=None)
+    a = mdb.models['Model-1'].rootAssembly
+    s1 = a.instances['Plane-2'].faces
+    side2Faces1 = s1.getSequenceFromMask(mask=('[#1 ]', ), )
+    region1=regionToolset.Region(side2Faces=side2Faces1)
+    a = mdb.models['Model-1'].rootAssembly
+    s1 = a.instances['Brain-1'].faces
+    side1Faces1 = s1.getSequenceFromMask(mask=('[#4004 ]', ), )
+    region2=regionToolset.Region(side1Faces=side1Faces1)
+    mdb.models['Model-1'].SurfaceToSurfaceContactExp(name ='Int-3', 
+        createStepName='Initial', master = region1, slave = region2, 
+        mechanicalConstraint=KINEMATIC, sliding=FINITE, 
+        interactionProperty='IntProp-1', initialClearance=OMIT, datumAxis=None, 
+        clearanceRegion=None)
+    #Boundary_Condition
+    r1 = a.instances['Plane-1'].referencePoints
+    refPoints1=(r1[2], )
+    r2 = a.instances['Plane-2'].referencePoints
+    refPoints2=(r2[2], )
+    region = regionToolset.Region(referencePoints=(refPoints1, refPoints2, ))
+    mdb.models['Model-1'].DisplacementBC(name='BC-1', createStepName='Initial', 
+        region=region, u1=SET, u2=SET, u3=SET, ur1=SET, ur2=SET, ur3=SET, 
+        amplitude=UNSET, distributionType=UNIFORM, fieldName='', 
+        localCsys=None)
+    a = mdb.models['Model-1'].rootAssembly
+    f1 = a.instances['Brain-1'].faces
+    faces1 = f1.getSequenceFromMask(mask=('[#2488 ]', ), )
+    region = regionToolset.Region(faces=faces1)
+    mdb.models['Model-1'].ZsymmBC(name='BC-2', createStepName='Initial', 
+        region=region, localCsys=None)
+    a = mdb.models['Model-1'].rootAssembly
+    f1 = a.instances['Brain-1'].faces
+    faces1 = f1.getSequenceFromMask(mask=('[#8860 ]', ), )
+    region = regionToolset.Region(faces=faces1)
+    mdb.models['Model-1'].XsymmBC(name='BC-3', createStepName='Initial', 
+        region=region, localCsys=None)
+    a = mdb.models['Model-1'].rootAssembly
+    f1 = a.instances['Brain-1'].faces
+    faces1 = f1.getSequenceFromMask(mask=('[#1010 ]', ), )
+    region = regionToolset.Region(faces=faces1)
+    mdb.models['Model-1'].DisplacementBC(name='BC-4', createStepName='Initial', 
+        region=region, u1=SET, u2=SET, u3=SET, ur1=SET, ur2=SET, ur3=SET, 
+        amplitude=UNSET, distributionType=UNIFORM, fieldName='', 
+        localCsys=None)
+    #for i in range(500):
+    modelName1 = 'Model-1'
+    modelName2 = 'Model-2'
+    partName = 'Brain'
+    instName = 'Brain-1'
+    stepName1='Step-1'
+    modelName2 = 'Model-2'
+    mdb.Model(name=modelName2, objectToCopy=mdb.models[modelName1])
+    del mdb.models[modelName2].steps[stepName1]
+    Coor = [[0 for col in range(3)] for row in range(len(mdb.models[modelName1].parts[partName].nodes))]
+    NSurfElm=0
+    for j in mdb.models[modelName1].parts[partName].nodes:
+        Coor[j.label-1][0]=j.coordinates[0]
+        Coor[j.label-1][1]=j.coordinates[1]
+        Coor[j.label-1][2]=j.coordinates[2]
+    Co=[0,0.25]#,0.5,1]
+    for I in range(len(Co)):
+        modelName1 = 'Model-1'
+        modelName2 = 'Model-'+str(I+2)
+        partName = 'Brain'
+        instName = 'Brain-1'
+        stepName1='Step-1'
+        mdb.Model(name=modelName2, objectToCopy=mdb.models[modelName1])
+        del mdb.models[modelName2].steps[stepName1]
+        #Coor = [[0 for col in range(3)] for row in range(len(mdb.models[modelName1].parts[partName].nodes))]
+        #NSurfElm=0
+        #for j in mdb.models[modelName1].parts[partName].nodes:
+        #    Coor[j.label-1][0]=j.coordinates[0]
+        #    Coor[j.label-1][1]=j.coordinates[1]
+        #    Coor[j.label-1][2]=j.coordinates[2]
+        #Coor_1=Coor
+        Coor_1=copy.deepcopy(Coor)
+        Fx_1=copy.deepcopy(Fx)
+        Fy_1=copy.deepcopy(Fy)
+        Fz_1=copy.deepcopy(Fz)
+        xamp_1=copy.deepcopy(xamp)
+        yamp_1=copy.deepcopy(yamp)
+        zamp_1=copy.deepcopy(zamp)
+        for k in range(len(Amplitude)):
+            A=Amplitude[k]*Co[I]
+            A1=PosOrNeg[k]
+            #Tet0=random.uniform(90,270)
+            #Fi0=random.uniform(20,90)
+            Tet0=180
+            Fi0=45
+            sigTet=sigTet_Main[k]
+            sigFi=sigFi_Main[k]
+            for n in range(len(Fx)):
+                for K in range(2):
+                    xpa=Fx_1[n][K]
+                    ypa=Fy_1[n][K]
+                    zpa=Fz_1[n][K]
+                    #Ro=sqrt(Coor[j.label-1][0]**2+Coor[j.label-1][1]**2+Coor[j.label-1][2]**2)
+                    xpy=xpa*cos(AlfAmp[k])*cos(BeAmp[k])+(cos(AlfAmp[k])*sin(BeAmp[k])*sin(GaAmp[k])-sin(AlfAmp[k])*cos(GaAmp[k]))*ypa+(cos(AlfAmp[k])*sin(BeAmp[k])*cos(GaAmp[k])+sin(AlfAmp[k])*sin(GaAmp[k]))*zpa
+                    ypy=xpa*(sin(AlfAmp[k])*cos(BeAmp[k]))+ypa*(sin(AlfAmp[k])*sin(BeAmp[k])*sin(GaAmp[k])+cos(AlfAmp[k])*cos(GaAmp[k]))+zpa*(sin(AlfAmp[k])*sin(BeAmp[k])*cos(GaAmp[k])-cos(AlfAmp[k])*sin(GaAmp[k]))
+                    zpy=xpa*(-sin(BeAmp[k]))+ypa*cos(BeAmp[k])*sin(GaAmp[k])+zpa*cos(BeAmp[k])*cos(GaAmp[k])
+                    Ro=sqrt(xpy**2+ypy**2+zpy**2)
+                    Tet=atan2(ypy,xpy)
+                    if Tet>=0:
+                        Tet=math.degrees(Tet)
+                    else:
+                        Tet=math.degrees(Tet)+360
+                    Fi=math.degrees(atan2((sqrt(xpy**2+ypy**2)),zpy))
+                    Roimp=Ro+(A*A1*exp(-((Tet-Tet0)**2/(2*sigTet**2)+(Fi-Fi0)**2/(2*sigFi**2))))*Ro/(R2+T)
+                    Tet=atan2(Fy_1[n][K],Fx_1[n][K])
+                    Fi=atan2((sqrt(Fx_1[n][K]**2+Fy_1[n][K]**2)),Fz_1[n][K])
+                    Fx_1[n][K]=Roimp*sin(Fi)*cos(Tet)
+                    Fy_1[n][K]=Roimp*sin(Fi)*sin(Tet)
+                    Fz_1[n][K]=Roimp*cos(Fi)
+            for n in range (len(xamp)):
+                xpa=xamp_1[n]
+                ypa=yamp_1[n]
+                zpa=zamp_1[n]
+                #Ro=sqrt(Coor[j.label-1][0]**2+Coor[j.label-1][1]**2+Coor[j.label-1][2]**2)
+                xpy=xpa*cos(AlfAmp[k])*cos(BeAmp[k])+(cos(AlfAmp[k])*sin(BeAmp[k])*sin(GaAmp[k])-sin(AlfAmp[k])*cos(GaAmp[k]))*ypa+(cos(AlfAmp[k])*sin(BeAmp[k])*cos(GaAmp[k])+sin(AlfAmp[k])*sin(GaAmp[k]))*zpa
+                ypy=xpa*(sin(AlfAmp[k])*cos(BeAmp[k]))+ypa*(sin(AlfAmp[k])*sin(BeAmp[k])*sin(GaAmp[k])+cos(AlfAmp[k])*cos(GaAmp[k]))+zpa*(sin(AlfAmp[k])*sin(BeAmp[k])*cos(GaAmp[k])-cos(AlfAmp[k])*sin(GaAmp[k]))
+                zpy=xpa*(-sin(BeAmp[k]))+ypa*cos(BeAmp[k])*sin(GaAmp[k])+zpa*cos(BeAmp[k])*cos(GaAmp[k])
+                Ro=sqrt(xpy**2+ypy**2+zpy**2)
+                Tet=atan2(ypy,xpy)
+                if Tet>=0:
+                    Tet=math.degrees(Tet)
+                else:
+                    Tet=math.degrees(Tet)+360
+                Fi=math.degrees(atan2((sqrt(xpy**2+ypy**2)),zpy))
+                Roimp=Ro+(A*A1*exp(-((Tet-Tet0)**2/(2*sigTet**2)+(Fi-Fi0)**2/(2*sigFi**2))))*Ro/(R2+T)
+                Tet=atan2(yamp_1[n],xamp_1[n])
+                Fi=atan2((sqrt(xamp_1[n]**2+yamp_1[n]**2)),zamp_1[n])
+                xamp_1[n]=Roimp*sin(Fi)*cos(Tet)
+                yamp_1[n]=Roimp*sin(Fi)*sin(Tet)
+                zamp_1[n]=Roimp*cos(Fi)           
+            for j in mdb.models[modelName2].parts[partName].nodes:
+                xpa=Coor_1[j.label-1][0]
+                ypa=Coor_1[j.label-1][1]
+                zpa=Coor_1[j.label-1][2]
+                #Ro=sqrt(Coor[j.label-1][0]**2+Coor[j.label-1][1]**2+Coor[j.label-1][2]**2)
+                xpy=xpa*cos(AlfAmp[k])*cos(BeAmp[k])+(cos(AlfAmp[k])*sin(BeAmp[k])*sin(GaAmp[k])-sin(AlfAmp[k])*cos(GaAmp[k]))*ypa+(cos(AlfAmp[k])*sin(BeAmp[k])*cos(GaAmp[k])+sin(AlfAmp[k])*sin(GaAmp[k]))*zpa
+                ypy=xpa*(sin(AlfAmp[k])*cos(BeAmp[k]))+ypa*(sin(AlfAmp[k])*sin(BeAmp[k])*sin(GaAmp[k])+cos(AlfAmp[k])*cos(GaAmp[k]))+zpa*(sin(AlfAmp[k])*sin(BeAmp[k])*cos(GaAmp[k])-cos(AlfAmp[k])*sin(GaAmp[k]))
+                zpy=xpa*(-sin(BeAmp[k]))+ypa*cos(BeAmp[k])*sin(GaAmp[k])+zpa*cos(BeAmp[k])*cos(GaAmp[k])
+                Ro=sqrt(xpy**2+ypy**2+zpy**2)
+                Tet=atan2(ypy,xpy)
+                if Tet>=0:
+                    Tet=math.degrees(Tet)
+                else:
+                    Tet=math.degrees(Tet)+360
+                Fi=math.degrees(atan2((sqrt(xpy**2+ypy**2)),zpy))
+                Roimp=Ro+(A*A1*exp(-((Tet-Tet0)**2/(2*sigTet**2)+(Fi-Fi0)**2/(2*sigFi**2))))*Ro/(R2+T)
+                Tet=atan2(Coor_1[j.label-1][1],Coor_1[j.label-1][0])
+                Fi=atan2((sqrt(Coor_1[j.label-1][0]**2+Coor_1[j.label-1][1]**2)),Coor_1[j.label-1][2])
+                Coor_1[j.label-1][0]=Roimp*sin(Fi)*cos(Tet)
+                Coor_1[j.label-1][1]=Roimp*sin(Fi)*sin(Tet)
+                Coor_1[j.label-1][2]=Roimp*cos(Fi)
+                #if round(j.coordinates[2]*1000)/1000==z2:
+                #Zimp=sin(rnd1*Coor[j.label-1][0]+rnd3)*cos(rnd2*Coor[j.label-1][1]+rnd4)*(j.coordinates[2]/z2)
+                #Zimp=A*A1*exp(-((Coor[j.label-1][0]-x0)**2/(2*sigx)+(Coor[j.label-1][1]-y0)**2/(2*sigy)))*(j.coordinates[2]/z2)
+                #Coor[j.label-1][2]=Coor[j.label-1][2]+Zimp
+        mdb.models[modelName2].parts[partName].editNode(nodes=mdb.models[modelName2].parts[partName].nodes,coordinates=Coor_1)
+        #odb.close()
+        mdb.models[modelName2].rootAssembly.regenerate()
+        for i in range(len(xamp_1)):
+            a = mdb.models[modelName2].rootAssembly
+            a.DatumPointByCoordinate(coords=(xamp_1[i],yamp_1[i],zamp_1[i]))
+        for i in range (len(Fx)):
+            p = mdb.models[modelName2].Part(name='Axon-'+str(i+1), dimensionality=THREE_D, type=DEFORMABLE_BODY)
+            p = mdb.models[modelName2].parts['Axon-'+str(i+1)]
+            p.WirePolyLine(points=(((Fx_1[i][0], Fy_1[i][0], Fz_1[i][0]), (Fx_1[i][1], Fy_1[i][1], Fz_1[i][1])), ), 
+                mergeType=IMPRINT, meshable=ON)
+            e = p.edges
+            edges = e.getSequenceFromMask(mask=('[#1 ]', ), )
+            p.Set(edges=edges, name='Wire-1-Set-1')
+            a1 = mdb.models[modelName2].rootAssembly
+            a1.Instance(name='Axon-'+str(i+1)+'-1', part=p, dependent=ON)
+        for i in range (len(Fx)):                
+            p = mdb.models[modelName2].parts['Axon-'+str(i+1)]
+            e = p.edges
+            edges = e.getSequenceFromMask(mask=('[#1 ]', ), )
+            region = regionToolset.Region(edges=edges)
+            p.SectionAssignment(region=region, sectionName='Axon', offset=0.0, 
+                offsetType=MIDDLE_SURFACE, offsetField='', 
+                thicknessAssignment=FROM_SECTION)
+            e = p.edges
+            edges = e.getSequenceFromMask(mask=('[#1 ]', ), )
+            region=regionToolset.Region(edges=edges)
+            p.assignBeamSectionOrientation(region=region, method=N1_COSINES, n1=(0.0, 0.0, 
+                -1.0))
+        for i in range (len(Fx)):   
+            p = mdb.models[modelName2].parts['Axon-'+str(i+1)]
+            p.seedPart(size=Mesh_Size, deviationFactor=0.1, minSizeFactor=0.1)
+            p.generateMesh()
+            elemType1 = mesh.ElemType(elemCode=T3D2, elemLibrary=STANDARD)
+            e = p.edges
+            edges = e.getSequenceFromMask(mask=('[#1 ]', ), )
+            pickedRegions =(edges, )
+            p.setElementType(regions=pickedRegions, elemTypes=(elemType1, ))
+        globals()['Fx_1_'+str(I+1)]=copy.deepcopy(Fx_1)
+        globals()['Fy_1_'+str(I+1)]=copy.deepcopy(Fy_1)
+        globals()['Fz_1_'+str(I+1)]=copy.deepcopy(Fz_1)
+    for I in range(len(Co)):
+        modelName2 = 'Model-'+str(I+2)
+        a = mdb.models[modelName2].rootAssembly
+        p1 = mdb.models[modelName2].parts['Axon-1']
+        session.viewports['Viewport: 1'].setValues(displayedObject=p1)
+        session.viewports['Viewport: 1'].partDisplay.setValues(mesh=ON)
+        session.viewports['Viewport: 1'].partDisplay.meshOptions.setValues(
+            meshTechnique=ON)
+        session.viewports['Viewport: 1'].partDisplay.geometryOptions.setValues(
+            referenceRepresentation=OFF)
+        session.viewports['Viewport: 1'].setValues(displayedObject=a)
+        a.regenerate()
+        session.viewports['Viewport: 1'].assemblyDisplay.setValues(mesh=ON, 
+            optimizationTasks=OFF, geometricRestrictions=OFF, stopConditions=OFF)
+        session.viewports['Viewport: 1'].assemblyDisplay.meshOptions.setValues(
+            meshTechnique=ON)
+        time.sleep(30)
+        for i in range(len(Fx_1_1)):  
+            globals()['e'+str(i+1)] = a.instances['Axon-'+str(i+1)+'-1'].elements
+            globals()['elements'+str(i+1)]=globals()['e'+str(i+1)].getByBoundingSphere((globals()['Fx_1_'+str(I+1)][i][1],globals()['Fy_1_'+str(I+1)][i][1],globals()['Fz_1_'+str(I+1)][i][1]),Mesh_Size*1.5)
+        String='a.Set(elements='
+        for i in range(len(Fx_1)):
+            String=String+'elements'+str(i+1)+'+'
+        String=String[:-1]
+        String=String+",name='Fiber_Tips')"
+        exec(String)
+    for I in range(len(Co)):
+        modelName2 = 'Model-'+str(I+2)
+        a = mdb.models[modelName2].rootAssembly
+        for i in range(len(Fx_1_1)):  
+            globals()['e'+str(i+1)] = a.instances['Axon-'+str(i+1)+'-1'].edges
+            globals()['edges'+str(i+1)]=globals()['e'+str(i+1)].getSequenceFromMask(mask=('[#1 ]', ), )
+        String='a.Set(edges='
+        for i in range(len(Fx_1)):
+            String=String+'edges'+str(i+1)+'+'
+        String=String[:-1]
+        String=String+",name='Fibers')"
+        exec(String)
+        region1=a.sets['Fibers']
+        mdb.models[modelName2].EmbeddedRegion(name='Constraint-1', 
+            embeddedRegion=region1, hostRegion=None, weightFactorTolerance=1e-06, 
+            absoluteTolerance=0.0, fractionalTolerance=0.05, toleranceMethod=BOTH)
+        mdb.models[modelName2].ExplicitDynamicsStep(name='Step-1', previous='Initial', 
+            improvedDtMethod=ON)
+        mdb.models[modelName2].fieldOutputRequests['F-Output-1'].setValues(variables=(
+            'S', 'SVAVG', 'U', 'V', 'A', 'EVF'), numIntervals=4)
+        mdb.models[modelName2].historyOutputRequests['H-Output-1'].setValues(variables=(
+            'ALLAE', 'ETOTAL'), timeInterval=2.5)
+        region = a.sets['Fibers']
+        mdb.models[modelName2].Temperature(name='Predefined Field-1', 
+            createStepName='Initial', region=region, distributionType=UNIFORM, 
+            crossSectionDistribution=CONSTANT_THROUGH_THICKNESS, magnitudes=(0.0, 
+            ))
+        mdb.models[modelName2].SmoothStepAmplitude(name='Amp-1', timeSpan=STEP, data=((
+            0.0, 0.0), (1.0, 1.0)))
+        mdb.models[modelName2].predefinedFields['Predefined Field-1'].setValuesInStep(
+            stepName='Step-1', magnitudes=(250.0, ), amplitude='Amp-1')
+        c1 = a.instances['Brain-1'].cells
+        cells1 = c1.getSequenceFromMask(mask=('[#f ]', ), )
+        f1 = a.instances['Brain-1'].faces
+        faces1 = f1.getSequenceFromMask(mask=('[#ffff ]', ), )
+        e1 = a.instances['Brain-1'].edges
+        edges1 = e1.getSequenceFromMask(mask=('[#7fffff ]', ), )
+        v1 = a.instances['Brain-1'].vertices
+        verts1 = v1.getSequenceFromMask(mask=('[#fff ]', ), )
+        region = regionToolset.Region(vertices=verts1, edges=edges1, faces=faces1, 
+            cells=cells1)
+        mdb.models[modelName2].Temperature(name='Predefined Field-2', 
+            createStepName='Initial', region=region, distributionType=UNIFORM, 
+            crossSectionDistribution=CONSTANT_THROUGH_THICKNESS, magnitudes=(0.0, 
+            ))
+        mdb.models[modelName2].predefinedFields['Predefined Field-2'].setValuesInStep(
+            stepName='Step-1', magnitudes=(250.0, ), amplitude='Amp-1')
+        region1=a.sets['Fibers']
+        mdb.models[modelName2].EmbeddedRegion(name='Constraint-1', 
+            embeddedRegion=region1, hostRegion=None, weightFactorTolerance=1e-06, 
+            absoluteTolerance=0.0, fractionalTolerance=0.05, toleranceMethod=BOTH)
+    #########################################################
+    f=open('Surface_Data.py','wt')
+    f.write("Coor=[")
+    for i in range (len(Coor)):
+        f.write("["+str(Coor[i][0])+','+str(Coor[i][1])+','+str(Coor[i][2])+'],')
+    f.write("]")
+    f.write('\n')
+    f.write("Fx=[")
+    for i in range (len(Fx)):
+        f.write("["+str(Fx[i][0])+','+str(Fx[i][1])+'],')
+    f.write("]")
+    f.write('\n')                    
+    f.write("Fy=[")
+    for i in range (len(Fy)):
+        f.write("["+str(Fy[i][0])+','+str(Fy[i][1])+'],')
+    f.write("]")
+    f.write('\n')
+    f.write("Fz=[")
+    for i in range (len(Fz)):
+        f.write("["+str(Fz[i][0])+','+str(Fz[i][1])+'],')
+    f.write("]")
+    f.write('\n')
+    f.write("xamp=[")
+    for i in range (len(xamp)):
+        f.write(str(xamp[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("yamp=[")
+    for i in range (len(yamp)):
+        f.write(str(yamp[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("zamp=[")
+    for i in range (len(zamp)):
+        f.write(str(zamp[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("Amplitude=[")
+    for i in range (len(Amplitude)):
+        f.write(str(Amplitude[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("PosOrNeg=[")
+    for i in range (len(PosOrNeg)):
+        f.write(str(PosOrNeg[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("sigTet_Main=[")
+    for i in range (len(sigTet_Main)):
+        f.write(str(sigTet_Main[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("sigFi_Main=[")
+    for i in range (len(sigFi_Main)):
+        f.write(str(sigFi_Main[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("AlfAmp=[")
+    for i in range (len(AlfAmp)):
+        f.write(str(AlfAmp[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("BeAmp=[")
+    for i in range (len(BeAmp)):
+        f.write(str(BeAmp[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.write("GaAmp=[")
+    for i in range (len(GaAmp)):
+        f.write(str(GaAmp[i])+',')
+    f.write("]")
+    f.write('\n')
+    f.close()
+    for I in range (len(Co)):
+        os.makedirs(cwd+'/'+NameDr+'/'+'Temp')
+        os.chdir(cwd+'/'+NameDr+'/'+'Temp')
+        Job_Name = str(NAmp)+'_Andulations_'+str(Number_of_Peaks)+'_Concentrations_Case_'+str(Scenario+1)+'_'+str(I)
+        ModelName='Model-'+str(I+2)
+        mdb.Job(name=Job_Name, model=ModelName, description='', type=ANALYSIS, 
+            atTime=None, waitMinutes=0, waitHours=0, queue=None, memory=80, 
+            memoryUnits=PERCENTAGE, getMemoryFromAnalysis=False, 
+            explicitPrecision=SINGLE, nodalOutputPrecision=SINGLE, echoPrint=OFF, 
+            modelPrint=OFF, contactPrint=OFF, historyPrint=OFF, userSubroutine='', 
+            scratch='', resultsFormat=ODB, multiprocessingMode=DEFAULT, numCpus=7, 
+            numDomains=7, numGPUs=0)
+        mdb.jobs[Job_Name].submit(consistencyChecking=OFF)
+        mdb.jobs[Job_Name].waitForCompletion()
+        #Name2="Case-"+str(i+1)
+        Original=cwd+'/'+NameDr+'/'+'Temp'+'/'+Job_Name+".odb"
+        Target=cwd+'/'+NameDr+'/'+Job_Name+".odb"
+        shutil.copyfile(Original, Target)
+        os.chdir(cwd+'/'+NameDr)
+        shutil.rmtree(cwd+'/'+NameDr+'/'+'Temp')
+    mdb.saveAs(pathName=cwd+'/'+NameDr+'/'+str(NAmp)+'_Andulations_'+str(Number_of_Peaks)+'_Concentrations_Case_'+str(Scenario+1))
+    Mdb()
+    #############################################
+
+
+
+
+
+
+
+
